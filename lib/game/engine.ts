@@ -91,7 +91,7 @@ function award(r: Room, p: Player, c: any, now: number) { if (!p.clues.includes(
 } }
 export function start(r: Room, now: number) { const ps = r.players.filter(p => !p.kicked); if (ps.length < 4 || ps.length > 16)
     throw Error('Start with 4–16 guests.'); let roles = ['Killer', ...(ps.length >= 12 ? ['Killer'] : []), 'Detective', ...(ps.length >= 5 ? ['Protector'] : []), ...(ps.length >= 6 ? ['Witness'] : []), ...(ps.length >= 10 ? ['Archivist'] : [])]; while (roles.length < ps.length)
-    roles.push('Guest'); roles = shuffle(roles); ps.forEach((p, i) => { p.role = roles[i]; p.alive = true; p.clues = []; p.notes = []; p.searches = 0; p.lastShield = undefined; }); r.players = ps; r.generation++; r.round = 1; r.started = now; r.endAt = now + r.settings.minutes * 60000; r.winner = undefined; r.finalVote = false; r.shared = []; r.discoveries = []; r.chat = []; r.log = ['9:47 PM. The lights go out. A shadow passes the mithai table. Aarav’s diya is extinguished. The first letter says: “Find the truth before midnight.”']; r.clues = makeClues(r); r.event = { id: crypto.randomUUID(), method: 'lantern', victim: 'Aarav Mehra', protected: false }; for (let p of ps) {
+    roles.push('Guest'); roles = shuffle(roles); ps.forEach((p, i) => { p.role = roles[i]; p.alive = true; p.clues = []; p.notes = []; p.searches = 0; p.lastShield = undefined; }); r.players = ps; r.generation++; r.round = 1; r.started = now; r.endAt = now + r.settings.minutes * 60000; r.winner = undefined; r.finalVote = false; r.shared = []; r.discoveries = []; r.chat = []; r.log = ['9:47 PM. The lights go out. A shadow passes the mithai table. Aarav’s diya is extinguished. The first letter says: “Find the truth before midnight.”']; r.clues = makeClues(r); r.event = { id: crypto.randomUUID(), method: 'lantern', victim: 'Aarav Mehra', protected: false, at: now }; for (let p of ps) {
     if (p.role === 'Witness')
         award(r, p, r.clues.find(c => c.id === 'rangoli'), now);
     if (p.role === 'Archivist')
@@ -120,7 +120,7 @@ function resolveBlackout(r: Room, now: number) { let ks = living(r).filter(p => 
     if (t)
         p.notes.push(`Round ${r.round}: ${t.name} ${t.role === 'Killer' ? 'is a Killer.' : 'is not a Killer.'}`);
 } let protectedTarget = shields.includes(victim.id); if (!protectedTarget)
-    victim.alive = false; r.event = { id: crypto.randomUUID(), method: choice.method || 'lantern', victim: victim.name, protected: protectedTarget }; log(r, protectedTarget ? `Round ${r.round}: ${victim.name}'s diya flickered—but a shield kept it alight. Nobody was taken out.` : `Round ${r.round}: ${victim.name}'s diya went out. Their name card is turned over.`); if (!won(r))
+    victim.alive = false; r.event = { id: crypto.randomUUID(), method: choice.method || 'lantern', victim: victim.name, protected: protectedTarget, at: now }; log(r, protectedTarget ? `Round ${r.round}: ${victim.name}'s diya flickered—but a shield kept it alight. Nobody was taken out.` : `Round ${r.round}: ${victim.name}'s diya went out. Their name card is turned over.`); if (!won(r))
     enter(r, 'discussion', now); }
 function resolveVote(r: Room, now: number) { let tally: Record<string, number> = {}; let alive = living(r); for (let p of alive) {
     let v = r.votes[p.id];
@@ -129,10 +129,15 @@ function resolveVote(r: Room, now: number) { let tally: Record<string, number> =
 } let ordered = Object.entries(tally).sort((a, b) => b[1] - a[1]); let top = ordered[0]; if (top && top[0] !== 'skip' && top[1] > alive.length / 2) {
     let p = r.players.find(p => p.id === top[0])!;
     p.alive = false;
-    log(r, `${p.name} was voted out: ${p.role === 'Killer' ? 'a Killer.' : 'an innocent guest.'}`);
+    const summary = `${p.name} was voted out: ${p.role === 'Killer' ? 'a Killer.' : 'an innocent guest.'}`;
+    r.event = { id: crypto.randomUUID(), kind: 'verdict', victim: p.name, summary, at: now };
+    log(r, summary);
 }
-else
-    log(r, `Round ${r.round}: no majority. Nobody was voted out.`); if (won(r))
+else {
+    const summary = 'No majority. Nobody was voted out.';
+    r.event = { id: crypto.randomUUID(), kind: 'verdict', summary, at: now };
+    log(r, `Round ${r.round}: no majority. Nobody was voted out.`);
+} if (won(r))
     return; if (r.finalVote) {
     r.phase = 'ended';
     r.winner = 'killers';
@@ -184,9 +189,13 @@ export function advance(r: Room, now: number) { for (let p of r.players) {
         log(r, 'Midnight approaches. One final 45-second vote.');
         break;
     }
-    if (now < r.deadline)
+    const alive = living(r);
+    const everyoneVoted = r.phase === 'vote' && alive.length > 0 && alive.every(p => Boolean(r.votes[p.id]));
+    const actors = r.phase === 'blackout' ? alive.filter(p => ['Killer', 'Detective', 'Protector'].includes(p.role)) : [];
+    const everyoneActed = actors.length > 0 && actors.every(p => Boolean(r.actions[p.id]));
+    if (now < r.deadline && !everyoneVoted && !everyoneActed)
         break;
-    let at = r.deadline;
+    const at = Math.min(now, r.deadline);
     if (r.phase === 'search')
         enter(r, 'blackout', at);
     else if (r.phase === 'blackout')
@@ -340,5 +349,5 @@ export function mutate(r: Room, p: Player, b: any, now: number) {
     else if (!['sync', 'join', 'recover'].includes(action))
         throw Error('Unknown action.');
 }
-export function project(r: Room, p: Player, now: number, version: number) { const ended = r.phase === 'ended'; const publicPlayers = r.players.filter(x => !x.kicked).map(x => ({ id: x.id, name: x.name, character: x.character, alive: x.alive, bot: x.bot, ghost: x.ghost, online: now - x.seen < 20000, role: ended ? x.role : undefined })); const safeClue = (c: any) => ({ id: c.id, title: c.title, text: c.text, location: c.location, letter: c.kind === 'letter', kind: ended ? c.kind : undefined, shared: r.shared.includes(c.id) }); return { schema: 2, code: r.code, host: r.host, phase: r.phase, generation: r.generation, round: r.round, deadline: r.deadline, endAt: r.endAt, serverNow: now, version, settings: r.settings, players: publicPlayers, me: { id: p.id, name: p.name, alive: p.alive, role: r.phase === 'lobby' ? 'Sealed' : p.role, help: r.phase === 'lobby' ? 'Your role opens when the host starts.' : roleHelp[p.role], searches: p.searches, notes: p.notes, recovery: p.recovery, lastShield: p.lastShield }, team: p.role === 'Killer' && r.phase !== 'lobby' ? killers(r).map(x => ({ id: x.id, name: x.name })) : [], inventory: r.clues.filter(c => p.clues.includes(c.id)).map(safeClue), shared: r.clues.filter(c => r.shared.includes(c.id)).map(safeClue), locations: locations.map(l => ({ ...l, available: r.clues.some(c => c.location === l.id && c.round <= r.round && !p.clues.includes(c.id)) })), myAction: r.actions[p.id], myVote: r.votes[p.id], voteCount: Object.keys(r.votes).length, log: r.log, chat: r.chat, event: r.event, winner: r.winner, finalVote: r.finalVote, recap: ended ? r.discoveries.map(d => ({ ...d, kind: r.clues.find(c => c.id === d.clue)?.kind })) : [], story: ended ? `${killers(r).map(x => x.name).join(' and ')} diverted the Diwali relief fund and forged the ledger. Aarav planned to expose the theft at midnight. The blackout hid the confrontation; the threatening letters were meant to turn the guests against each other. The gold cuff, moved sweet tray and double reflection were distractions. The ledger and letter fragments told the real story.` : undefined }; }
+export function project(r: Room, p: Player, now: number, version: number) { const ended = r.phase === 'ended'; const publicPlayers = r.players.filter(x => !x.kicked).map(x => ({ id: x.id, name: x.name, character: x.character, alive: x.alive, bot: x.bot, ghost: x.ghost, online: now - x.seen < 20000, voted: r.phase === 'vote' && x.alive ? Boolean(r.votes[x.id]) : undefined, role: ended ? x.role : undefined })); const safeClue = (c: any) => ({ id: c.id, title: c.title, text: c.text, location: c.location, letter: c.kind === 'letter', kind: ended ? c.kind : undefined, shared: r.shared.includes(c.id) }); return { schema: 2, code: r.code, host: r.host, phase: r.phase, generation: r.generation, round: r.round, deadline: r.deadline, endAt: r.endAt, serverNow: now, version, settings: r.settings, players: publicPlayers, me: { id: p.id, name: p.name, alive: p.alive, role: r.phase === 'lobby' ? 'Sealed' : p.role, help: r.phase === 'lobby' ? 'Your role opens when the host starts.' : roleHelp[p.role], searches: p.searches, notes: p.notes, recovery: p.recovery, lastShield: p.lastShield }, team: p.role === 'Killer' && r.phase !== 'lobby' ? killers(r).map(x => ({ id: x.id, name: x.name })) : [], inventory: r.clues.filter(c => p.clues.includes(c.id)).map(safeClue), shared: r.clues.filter(c => r.shared.includes(c.id)).map(safeClue), locations: locations.map(l => ({ ...l, available: r.clues.some(c => c.location === l.id && c.round <= r.round && !p.clues.includes(c.id)) })), myAction: r.actions[p.id], myVote: r.votes[p.id], voteCount: Object.keys(r.votes).length, log: r.log, chat: r.chat, event: r.event && (!r.event.at || now - r.event.at <= 12000) ? r.event : undefined, winner: r.winner, finalVote: r.finalVote, recap: ended ? r.discoveries.map(d => ({ ...d, kind: r.clues.find(c => c.id === d.clue)?.kind })) : [], story: ended ? `${killers(r).map(x => x.name).join(' and ')} diverted the Diwali relief fund and forged the ledger. Aarav planned to expose the theft at midnight. The blackout hid the confrontation; the threatening letters were meant to turn the guests against each other. The gold cuff, moved sweet tray and double reflection were distractions. The ledger and letter fragments told the real story.` : undefined }; }
 export function upgradeLegacy(old: any, now: number): Room { let r = createRoom(old.code, 'Host', now); r.players = old.players.map((p: any, i: number) => ({ ...player(p.name, now, i), id: p.id, token: p.token, seen: 0 })); r.host = old.host; r.log = ['This room has been upgraded. Your seats are preserved; the host can start a fresh game with the new rules.']; return r; }
