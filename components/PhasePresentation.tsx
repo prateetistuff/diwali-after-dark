@@ -69,7 +69,7 @@ export function PhaseOverlay({ title, copy, label, onClose, children, className 
 }
 
 export function ShadowTheatre({ method, saved }: { method: string; saved: boolean }) {
-    return <div className={'shadow-theatre theatre-' + method} data-saved={saved} aria-hidden="true">
+    return <div className={'shadow-theatre theatre-variant-' + method} data-saved={saved} aria-hidden="true">
         <div className="theatre-stars">✦ · ✧ · ✦ · ✧</div>
         <div className="theatre-arch"><span/><span/><span/></div>
         <div className="theatre-floor">❋</div>
