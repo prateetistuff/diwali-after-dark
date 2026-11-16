@@ -23,3 +23,40 @@ let requestId=crypto.randomUUID();let a=await call({action:'create',name:'Host',
 console.log('PASS: idempotent room creation and join, seat recovery, invalid credential rejection.');
 
 let fresh=await call({action:'create',name:'Concurrent host',requestId:crypto.randomUUID()});const joins=await Promise.all(Array.from({length:15},(_,i)=>call({action:'join',name:'Concurrent '+i,code:fresh.code,requestId:crypto.randomUUID()})));assert(joins.every(j=>!j.error));let latest=await call({action:'sync',code:fresh.code,token:fresh.token});assert.equal(latest.players.length,16);console.log('PASS: 15 simultaneous joins preserve all 16 seats.');
+
+// Public ballot progress identifies submitters but keeps their choices private.
+r=setup(6);
+r.phase='vote';
+r.deadline=now+35000;
+const voters=r.players;
+mutate(r,voters[0],{action:'vote',target:voters[1].id},now);
+const view=project(r,voters[2],now,1);
+assert.equal(view.players.find(p=>p.id===voters[0].id).voted,true);
+assert.equal(view.players.find(p=>p.id===voters[2].id).voted,false);
+assert.equal(view.myVote,undefined);
+assert.equal(view.votes,undefined);
+voters[5].seen=now-25000;
+advance(r,now+1000);
+assert.equal(r.phase,'vote');
+for (const [i,voter] of voters.entries()) {
+    mutate(r,voter,{action:'vote',target:i<3?voters[1].id:voters[2].id},now+1000);
+}
+advance(r,now+1000);
+assert.equal(r.phase,'search');
+assert.equal(r.event.kind,'verdict');
+assert.equal(r.event.summary,'No majority. Nobody was voted out.');
+assert(voters.every(p=>p.alive));
+
+r=setup(6);
+r.phase='blackout';
+r.deadline=now+25000;
+const targetGuest=r.players.find(p=>p.role==='Guest');
+for (const actor of r.players.filter(p=>['Killer','Detective','Protector'].includes(p.role))) {
+    mutate(r,actor,{action:'secretAction',target:targetGuest.id,method:'lantern'},now);
+}
+advance(r,now+1000);
+assert.equal(r.phase,'discussion');
+assert.equal(r.deadline,now+76000);
+assert.equal(r.event.protected,true);
+assert.equal(project(r,targetGuest,now+14000,1).event,undefined);
+console.log('PASS: private ballot choices, away-player deadline, early phase completion, tied verdict and cutscene expiration.');
